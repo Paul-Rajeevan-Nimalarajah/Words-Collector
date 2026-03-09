@@ -23,24 +23,26 @@ def get_word():
 
 def load_index(current_dir):
     """
-    Parses index.md to extract a list of already documented words.
-    Returns a set of lowercase words for O(1) lookup.
+    Parses index.md to extract words and their added dates.
+    Returns a dictionary {word_lowercase: date_string} for O(1) lookup.
     """
     index_path = os.path.join(current_dir, INDEX_FILE)
-    words = set()
+    word_map = {}
     
     if os.path.exists(index_path):
         try:
             with open(index_path, 'r', encoding='utf-8') as f:
                 for line in f:
-                    # Matches markdown table rows: | Word | Date | Link |
-                    # We look for the first column.
-                    match = re.search(r'^\|\s*([^\|\s#]+)\s*\|', line)
+                    # Matches markdown table rows: | Word | Date Added | Link |
+                    # Capture Word and Date Added regardless of spaces or special characters.
+                    match = re.search(r'^\|\s*([^\|]+?)\s*\|\s*([^\|]+?)\s*\|', line)
                     if match:
-                        word = match.group(1).strip().lower()
-                        if word and word != "word" and ":" not in word:
-                            words.add(word)
-            return words
+                        word = match.group(1).strip()
+                        date = match.group(2).strip()
+                        # Skip header or empty rows
+                        if word.lower() and word.lower() != "word" and ":" not in word:
+                            word_map[word.lower()] = date
+            return word_map
         except Exception as e:
             print(f"Warning: Could not read index.md ({e}). Falling back to file scan.")
     
@@ -52,19 +54,22 @@ def scan_files_for_duplicates(current_dir, target_word):
     Slow (O(N)), but used if index.md is missing.
     """
     print("Performing deep scan of all files...")
-    target_lower = target_word.lower()
     for filename in os.listdir(current_dir):
         if DATE_PATTERN.match(filename):
             file_path = os.path.join(current_dir, filename)
             with open(file_path, 'r', encoding='utf-8') as f:
+                # regex to match ## [optional spaces] target_word [case-insensitive]
                 if re.search(f'^## {re.escape(target_word)}', f.read(), re.IGNORECASE | re.MULTILINE):
-                    return filename
+                    # For daily files, the filename IS the date
+                    return filename.replace(".md", "")
     return None
 
 def update_index(current_dir, word, date, filename):
     """Appends the new word to the index.md table."""
     index_path = os.path.join(current_dir, INDEX_FILE)
-    new_row = f"| {word} | {date} | [{filename}](#{word.lower()}) |\n"
+    # The link should use the word itself as anchor
+    anchor = word.lower().replace(" ", "-") # Simple sanitization for link
+    new_row = f"| {word} | {date} | [{filename}](#{anchor}) |\n"
     
     # If the index doesn't exist, create it with headers
     if not os.path.exists(index_path):
@@ -81,17 +86,17 @@ def add_word():
     current_dir = os.getcwd()
     
     # 1. Faster Duplicate Check (via Index)
-    indexed_words = load_index(current_dir)
+    word_map = load_index(current_dir)
     
-    if indexed_words is not None:
-        if word.lower() in indexed_words:
-            print(f"Duplicate detected via index! Word '{word}' already exists.")
+    if word_map is not None:
+        if word.lower() in word_map:
+            print(f"Duplicate detected via index! Word '{word}' was already added on: {word_map[word.lower()]}")
             sys.exit(0)
     else:
         # Fallback to file scan if index is missing/corrupted
-        duplicate_file = scan_files_for_duplicates(current_dir, word)
-        if duplicate_file:
-            print(f"Duplicate found in {duplicate_file}!")
+        duplicate_date = scan_files_for_duplicates(current_dir, word)
+        if duplicate_date:
+            print(f"Duplicate detected via deep scan! Word '{word}' was already added on: {duplicate_date}")
             sys.exit(0)
 
     # 2. File Initialization
@@ -117,7 +122,6 @@ def add_word():
     new_entry = template_content.replace("Word", word)
 
     with open(today_path, 'a', encoding='utf-8') as f:
-        # Simple spacing check
         f.write("\n" + new_entry)
 
     # 4. Update the Index automatically
